@@ -13,12 +13,13 @@ GLint mvp_location, vpos_location, vcol_location;
 static const struct
 {
     float x, y;
-    float r, g, b;
-} vertices[3] =
+    float u, v;
+} vertices[4] =
 {
-    { -0.6f, -0.4f, 1.f, 0.f, 0.f },
-    {  0.6f, -0.4f, 0.f, 1.f, 0.f },
-    {   0.f,  0.6f, 0.f, 0.f, 1.f }
+    { -0.5f, 0.5f, 0.f, 0.f },
+    {  -0.5f, -0.5f, 0.f, 1.f },
+    {   0.5f,  0.5f, 1.f, 0.f },
+    { .5f, -.5f, 1.f, 1.f, 1.f }
 };
 static const char* vertex_shader_text =
     "#version 300 es\n"
@@ -52,13 +53,34 @@ static void generate_frame() {
     ratio = width / (float) height;
     glViewport(0, 0, width, height);
     glClear(GL_COLOR_BUFFER_BIT);
+    
     mat4x4_identity(m);
-    mat4x4_rotate_Z(m, m, (float) glfwGetTime());
-    mat4x4_ortho(p, -ratio, ratio, -1.f, 1.f, 1.f, -1.f);
-    mat4x4_mul(mvp, p, m);
+    float time = (float) glfwGetTime();
+    float rot = time;
+    float scale = 1;
+    int tris = 100000;
+    float offset = 0; 
+    float offsetAmount = .01f;
+    float windowSize = 2;//tris * offsetAmount;
     glUseProgram(program);
-    glUniformMatrix4fv(mvp_location, 1, GL_FALSE, (const GLfloat*) mvp);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    mat4x4_ortho(p, -windowSize*ratio, windowSize*ratio, -windowSize, windowSize, windowSize, -windowSize);
+    for (int tri = 0; tri < tris; tri++)
+    { 
+        rot = time * .005f+1000; 
+        // offset = offset * .9999999999;
+        scale = (float)tri / tris;
+	scale = 1 - scale*scale;     
+        mat4x4_scale_aniso(m, m, scale, scale, 1);
+        mat4x4_rotate_Z(m, m, rot);
+        mat4x4_translate_in_place(m, offset, offset, 0);
+        mat4x4_mul(mvp, p, m);
+    
+        glUniformMatrix4fv(mvp_location, 1, GL_FALSE, (const GLfloat*) mvp);
+    
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        scale = scale * .9f;
+        offset += .01;
+    }
 
     glfwSwapBuffers(window);
     glfwPollEvents();
@@ -99,6 +121,14 @@ static int check_linked(program) {
     return success;
 }
 
+EM_JS(int, canvas_get_width, (), {
+  return document.getElementById("canvas").clientWidth;
+});
+
+EM_JS(int, canvas_get_height, (), {
+  return document.getElementById("canvas").clientHeight;
+});
+
 int main() {
     glfwSetErrorCallback(output_error);
 
@@ -110,7 +140,7 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 
-    window = glfwCreateWindow(640, 480, "My Title", NULL, NULL);
+    window = glfwCreateWindow(canvas_get_width(), canvas_get_height(), "My Title", NULL, NULL);
 
     if (!window) {
         fputs("Failed to create GLFW window", stderr);
