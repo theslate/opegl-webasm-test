@@ -1,15 +1,18 @@
-#include "linmath.h"
 
-#include <emscripten/emscripten.h>
+#include <emscripten.h>
 #define GLFW_INCLUDE_ES3
 #include <GLFW/glfw3.h>
 #include <GLES3/gl3.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
+
+#include "linmath.h"
+#include "lodepng.h"
 
 GLFWwindow * window;
 GLuint vertex_buffer, vertex_shader, fragment_shader, program;
-GLint mvp_location, vpos_location, vcol_location;
+GLint mvp_location, vpos_location, vcol_location, vtexCoord_location;
 static const struct
 {
     float x, y;
@@ -17,28 +20,31 @@ static const struct
 } vertices[4] =
 {
     { -0.5f, 0.5f, 0.f, 0.f },
-    {  -0.5f, -0.5f, 0.f, 1.f },
-    {   0.5f,  0.5f, 1.f, 0.f },
-    { .5f, -.5f, 1.f, 1.f, 1.f }
+    { -0.5f, -0.5f, 0.f, 1.f },
+    { 0.5f, 0.5f, 1.f, 0.f },
+    { 0.5f, -.5f, 1.f, 1.f }
 };
+
 static const char* vertex_shader_text =
     "#version 300 es\n"
     "uniform mat4 MVP;\n"
-    "in lowp vec3 vCol;\n"
-    "in lowp vec2 vPos;\n"
-    "out lowp vec3 i_color;\n"
+    "in highp vec2 vPos;\n"
+    "in lowp vec2 vTexCoord;\n"
+    "out lowp vec2 v_texCoord;\n"
     "void main()\n"
     "{\n"
     "    gl_Position = MVP * vec4(vPos, 0.0, 1.0);\n"
-    "    i_color = vCol;\n"
+    "    v_texCoord = vTexCoord; \n"
     "}\n";
+
 static const char* fragment_shader_text =
     "#version 300 es\n"
-    "in lowp vec3 i_color;\n"
+    "in lowp vec2 v_texCoord;\n"
     "out lowp vec4 o_color;\n"
+    "uniform sampler2D texture2d;\n"
     "void main()\n"
     "{\n"
-    "    o_color = vec4(i_color, 1.0);\n"
+    "   o_color = texture(texture2d, v_texCoord);"
     "}\n";
 
 static void output_error(int error, const char * msg) {
@@ -56,30 +62,27 @@ static void generate_frame() {
     
     mat4x4_identity(m);
     float time = (float) glfwGetTime();
-    float rot = time;
-    float scale = 1;
-    int tris = 100000;
+    float scale = .99f;
+    int tris = fmin(time*60.0f, 10000);
+    float rot = time*.01f + 3.14/4;
     float offset = 0; 
-    float offsetAmount = .01f;
+    float offsetAmount = .05f;
     float windowSize = 2;//tris * offsetAmount;
     glUseProgram(program);
     mat4x4_ortho(p, -windowSize*ratio, windowSize*ratio, -windowSize, windowSize, windowSize, -windowSize);
     for (int tri = 0; tri < tris; tri++)
     { 
-        rot = time * .005f+1000; 
-        // offset = offset * .9999999999;
-        scale = (float)tri / tris;
-	scale = 1 - scale*scale;     
-        mat4x4_scale_aniso(m, m, scale, scale, 1);
+        rot = rot * 1.0001f;  
+        offset = offset * scale;
+        mat4x4_scale_aniso(m, m, scale, scale, scale);
         mat4x4_rotate_Z(m, m, rot);
-        mat4x4_translate_in_place(m, offset, offset, 0);
+        mat4x4_translate_in_place(m, offset, 0, 0);
         mat4x4_mul(mvp, p, m);
     
         glUniformMatrix4fv(mvp_location, 1, GL_FALSE, (const GLfloat*) mvp);
     
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        scale = scale * .9f;
-        offset += .01;
+        offset += offsetAmount *scale;
     }
 
     glfwSwapBuffers(window);
@@ -130,6 +133,7 @@ EM_JS(int, canvas_get_height, (), {
 });
 
 int main() {
+    
     glfwSetErrorCallback(output_error);
 
     if (!glfwInit()) {
@@ -148,6 +152,8 @@ int main() {
         emscripten_force_exit(EXIT_FAILURE);
     }
 
+    glEnable(GL_BLEND); 
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); 
     glfwMakeContextCurrent(window);
 
     glGenBuffers(1, &vertex_buffer);
@@ -170,15 +176,33 @@ int main() {
     glLinkProgram(program);
     check_linked(program);
 
+    // Load file and decode image.  
+    // Ratio for power of two version compared to actual version, to render the non power of two image with proper size.
+    unsigned char* image;
+    unsigned width, height;
+    unsigned error = lodepng_decode32_file(&image, &width, &height, "assets/goose60.png");
+    size_t u2 = 1; while(u2 < width) u2 *= 2;
+    size_t v2 = 1; while(v2 < height) v2 *= 2;
+
+    // glEnable(GL_TEXTURE_2D);
+    unsigned int texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, u2, v2, 0, GL_RGBA, GL_UNSIGNED_BYTE, &image[0]);
+
     mvp_location = glGetUniformLocation(program, "MVP");
     vpos_location = glGetAttribLocation(program, "vPos");
-    vcol_location = glGetAttribLocation(program, "vCol");
+    vtexCoord_location = glGetAttribLocation(program, "vTexCoord");
+
     glEnableVertexAttribArray(vpos_location);
     glVertexAttribPointer(vpos_location, 2, GL_FLOAT, GL_FALSE,
-        sizeof(float) * 5, (void*) 0);
-    glEnableVertexAttribArray(vcol_location);
-    glVertexAttribPointer(vcol_location, 3, GL_FLOAT, GL_FALSE,
-        sizeof(float) * 5, (void*) (sizeof(float) * 2));
+        sizeof(float) * 4, (void*) 0);
 
-    emscripten_set_main_loop(generate_frame, 0, 0);
+    glEnableVertexAttribArray(vtexCoord_location);
+    glVertexAttribPointer(vtexCoord_location, 2, GL_FLOAT, GL_FALSE,
+        sizeof(float) * 4, (void*) (sizeof(float) * 2));
+
+    emscripten_set_main_loop(generate_frame, 60, 0);
 }
